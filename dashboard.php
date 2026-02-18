@@ -432,7 +432,7 @@ $top_products = mysqli_query($conn, "
                         </div>
                     </a>
                     
-                    <a href="#" class="w-full flex items-center p-3 rounded-lg border border-gray-200 hover:bg-green-50 hover:border-green-200 transition-all duration-200 group">
+                    <a href="reports.php" class="w-full flex items-center p-3 rounded-lg border border-gray-200 hover:bg-green-50 hover:border-green-200 transition-all duration-200 group">
                         <div class="w-10 h-10 bg-green-100 rounded-lg flex items-center justify-center group-hover:bg-green-200">
                             <i class="fas fa-chart-line text-green-600"></i>
                         </div>
@@ -442,7 +442,7 @@ $top_products = mysqli_query($conn, "
                         </div>
                     </a>
                     
-                    <a href="#" class="w-full flex items-center p-3 rounded-lg border border-gray-200 hover:bg-yellow-50 hover:border-yellow-200 transition-all duration-200 group">
+                    <a href="settings.php" class="w-full flex items-center p-3 rounded-lg border border-gray-200 hover:bg-yellow-50 hover:border-yellow-200 transition-all duration-200 group">
                         <div class="w-10 h-10 bg-yellow-100 rounded-lg flex items-center justify-center group-hover:bg-yellow-200">
                             <i class="fas fa-cog text-yellow-600"></i>
                         </div>
