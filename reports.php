@@ -316,7 +316,7 @@ $top_products = mysqli_query($conn, "
         </div>
 
         <!-- Simple Export -->
-        <div class="mt-4 text-right">
+        <div class="mt-5 text-right">
             <button onclick="window.print()" class="px-4 py-2 bg-gray-600 text-white rounded-lg text-sm hover:bg-gray-700">
                 <i class="fas fa-print mr-2"></i>
                 Print Report

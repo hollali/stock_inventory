@@ -12,6 +12,18 @@ error_reporting(E_ALL);
 include './config/connect.php';
 
 // ------------------------------
+// PAGINATION SETUP
+// ------------------------------
+$records_per_page = 10;
+$page = isset($_GET['page']) && is_numeric($_GET['page']) ? (int)$_GET['page'] : 1;
+$offset = ($page - 1) * $records_per_page;
+
+// Get total records for pagination
+$total_records_query = mysqli_query($conn, "SELECT COUNT(*) as total FROM products");
+$total_records = mysqli_fetch_assoc($total_records_query)['total'];
+$total_pages = ceil($total_records / $records_per_page);
+
+// ------------------------------
 // FUNCTION TO GENERATE SKU
 // ------------------------------
 function generateSKU($conn, $category_id = null) {
@@ -243,14 +255,14 @@ if (isset($_POST['action']) && $_POST['action'] == "export") {
         header('Content-Disposition: attachment; filename="products_export_' . date('Y-m-d') . '.csv"');
         
         $output = fopen('php://output', 'w');
-        fputcsv($output, ['Name', 'SKU', 'Category', 'Price', 'Current Stock', 'Total In', 'Total Out']);
+        fputcsv($output, ['Name', 'SKU', 'Category', 'Price (₵)', 'Current Stock', 'Total In', 'Total Out']);
         
         foreach ($products as $product) {
             fputcsv($output, [
                 $product['name'],
                 $product['sku'],
                 $product['category_name'],
-                '$' . number_format($product['price'], 2),
+                '₵' . number_format($product['price'], 2),
                 $product['quantity'],
                 $product['total_in'] ?? 0,
                 $product['total_out'] ?? 0
@@ -270,14 +282,14 @@ if (isset($_POST['action']) && $_POST['action'] == "export") {
         $html .= '</head><body>';
         $html .= '<h2>Products Export - ' . date('Y-m-d') . '</h2>';
         $html .= '<table>';
-        $html .= '<tr><th>Name</th><th>SKU</th><th>Category</th><th>Price</th><th>Stock</th><th>Total In</th><th>Total Out</th></tr>';
+        $html .= '<tr><th>Name</th><th>SKU</th><th>Category</th><th>Price (₵)</th><th>Stock</th><th>Total In</th><th>Total Out</th></tr>';
         
         foreach ($products as $product) {
             $html .= '<tr>';
             $html .= '<td>' . htmlspecialchars($product['name']) . '</td>';
             $html .= '<td>' . htmlspecialchars($product['sku']) . '</td>';
             $html .= '<td>' . htmlspecialchars($product['category_name']) . '</td>';
-            $html .= '<td>$' . number_format($product['price'], 2) . '</td>';
+            $html .= '<td>₵' . number_format($product['price'], 2) . '</td>';
             $html .= '<td>' . $product['quantity'] . '</td>';
             $html .= '<td>' . ($product['total_in'] ?? 0) . '</td>';
             $html .= '<td>' . ($product['total_out'] ?? 0) . '</td>';
@@ -300,13 +312,14 @@ if (isset($_POST['action']) && $_POST['action'] == "export") {
 $categories = mysqli_query($conn, "SELECT * FROM categories ORDER BY name");
 
 // ------------------------------
-// FETCH PRODUCTS WITH CATEGORIES
+// FETCH PRODUCTS WITH CATEGORIES (WITH PAGINATION)
 // ------------------------------
 $products = mysqli_query($conn, "
     SELECT p.*, c.name as category_name 
     FROM products p 
     LEFT JOIN categories c ON p.category_id = c.id 
     ORDER BY p.id DESC
+    LIMIT $offset, $records_per_page
 ");
 ?>
 
@@ -394,6 +407,63 @@ $products = mysqli_query($conn, "
         
         .custom-scrollbar::-webkit-scrollbar-thumb:hover {
             background: #555;
+        }
+        
+        /* Modern Pagination Styles */
+        .pagination {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 0.5rem;
+            margin-top: 2rem;
+            margin-bottom: 1rem;
+        }
+        
+        .pagination-item {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 2.5rem;
+            height: 2.5rem;
+            padding: 0 0.5rem;
+            border-radius: 0.5rem;
+            font-size: 0.875rem;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+        
+        .pagination-item:hover {
+            background-color: #f3f4f6;
+        }
+        
+        .pagination-item.active {
+            background-color: #3b82f6;
+            color: white;
+        }
+        
+        .pagination-item.active:hover {
+            background-color: #2563eb;
+        }
+        
+        .pagination-item.disabled {
+            opacity: 0.5;
+            pointer-events: none;
+            cursor: not-allowed;
+        }
+        
+        .pagination-item.dots {
+            pointer-events: none;
+        }
+        
+        .pagination-item i {
+            font-size: 0.75rem;
+        }
+        
+        .pagination-info {
+            text-align: center;
+            color: #6b7280;
+            font-size: 0.875rem;
+            margin-top: 0.5rem;
         }
     </style>
 </head>
@@ -517,7 +587,9 @@ $products = mysqli_query($conn, "
         <div class="bg-white rounded-lg shadow overflow-hidden">
             <div class="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
                 <h2 class="text-lg font-semibold text-gray-800">Product List</h2>
-                <span class="text-sm text-gray-500" id="totalProductsCount">Total: <?= mysqli_num_rows($products) ?> products</span>
+                <span class="text-sm text-gray-500" id="totalProductsCount">
+                    Page <?= $page ?> of <?= $total_pages ?> (Total: <?= $total_records ?> products)
+                </span>
             </div>
             <div class="overflow-x-auto">
                 <table class="w-full">
@@ -534,9 +606,7 @@ $products = mysqli_query($conn, "
                     <tbody id="productsTableBody" class="bg-white divide-y divide-gray-200">
                         <?php if(mysqli_num_rows($products) > 0): ?>
                             <?php 
-                            $totalProducts = 0;
                             while($row = mysqli_fetch_assoc($products)) { 
-                                $totalProducts++;
                             ?>
                             <tr class="hover:bg-gray-50 transition-colors duration-200 product-row" 
                                 data-name="<?= strtolower(htmlspecialchars($row['name'])) ?>"
@@ -566,7 +636,7 @@ $products = mysqli_query($conn, "
                                         <i class="fas fa-edit"></i>
                                     </button>
                                 </td>
-                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">$<?= number_format($row['price'], 2) ?></td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">₵<?= number_format($row['price'], 2) ?></td>
                                 <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
                                     <button onclick="openViewModal(<?= $row['id'] ?>)" 
                                             class="text-green-600 hover:text-green-900 mr-3 transition-colors duration-200">
@@ -598,11 +668,59 @@ $products = mysqli_query($conn, "
                     </tbody>
                 </table>
             </div>
+            
+            <!-- Modern Pagination -->
+            <?php if($total_pages > 1): ?>
+            <div class="border-t border-gray-200 px-6 py-4">
+                <div class="pagination">
+                    <!-- Previous button -->
+                    <a href="?page=<?= max(1, $page-1) ?>" 
+                       class="pagination-item <?= $page <= 1 ? 'disabled' : '' ?>">
+                        <i class="fas fa-chevron-left"></i>
+                    </a>
+                    
+                    <?php
+                    $start_page = max(1, $page - 2);
+                    $end_page = min($total_pages, $page + 2);
+                    
+                    // Show first page if not in range
+                    if($start_page > 1) {
+                        echo '<a href="?page=1" class="pagination-item">1</a>';
+                        if($start_page > 2) {
+                            echo '<span class="pagination-item dots">...</span>';
+                        }
+                    }
+                    
+                    // Show pages
+                    for($i = $start_page; $i <= $end_page; $i++) {
+                        $active_class = $i == $page ? 'active' : '';
+                        echo '<a href="?page=' . $i . '" class="pagination-item ' . $active_class . '">' . $i . '</a>';
+                    }
+                    
+                    // Show last page if not in range
+                    if($end_page < $total_pages) {
+                        if($end_page < $total_pages - 1) {
+                            echo '<span class="pagination-item dots">...</span>';
+                        }
+                        echo '<a href="?page=' . $total_pages . '" class="pagination-item">' . $total_pages . '</a>';
+                    }
+                    ?>
+                    
+                    <!-- Next button -->
+                    <a href="?page=<?= min($total_pages, $page+1) ?>" 
+                       class="pagination-item <?= $page >= $total_pages ? 'disabled' : '' ?>">
+                        <i class="fas fa-chevron-right"></i>
+                    </a>
+                </div>
+                
+                <div class="pagination-info">
+                    Showing page <?= $page ?> of <?= $total_pages ?> | 
+                    <?= min($offset + 1, $total_records) ?> - <?= min($offset + $records_per_page, $total_records) ?> of <?= $total_records ?> products
+                </div>
+            </div>
+            <?php endif; ?>
         </div>
     </div>
-
-    <!-- Hidden total products count -->
-    <input type="hidden" id="totalProductsCount" value="<?= $totalProducts ?? 0 ?>">
 
     <!-- ================= ADD MODAL ================= -->
     <div id="addModal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50">
@@ -643,8 +761,8 @@ $products = mysqli_query($conn, "
                     <p class="text-xs text-gray-500 mt-1">SKU is automatically generated based on category</p>
                 </div>
                 <div class="mb-4">
-                    <label class="block text-sm font-medium text-gray-700 mb-2">Price</label>
-                    <input type="number" name="price" placeholder="Enter price" step="0.01" 
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Price (₵)</label>
+                    <input type="number" name="price" placeholder="Enter price in Cedis" step="0.01" 
                            class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" required>
                 </div>
                 <div class="mb-4">
@@ -704,7 +822,7 @@ $products = mysqli_query($conn, "
                     </div>
                 </div>
                 <div class="mb-4">
-                    <label class="block text-sm font-medium text-gray-700 mb-2">Price</label>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Price (₵)</label>
                     <input type="number" name="price" id="edit_price" step="0.01" 
                            class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" required>
                 </div>
@@ -745,7 +863,7 @@ $products = mysqli_query($conn, "
     <div id="stockModal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50">
         <div class="bg-white p-6 w-96 rounded-lg shadow-xl">
             <div class="flex justify-between items-center mb-4">
-            <h2 class="text-xl font-bold text-gray-800">Update Stock - <span id="stock_product_name"></span></h2>
+                <h2 class="text-xl font-bold text-gray-800">Update Stock - <span id="stock_product_name"></span></h2>
                 <button onclick="closeModal('stockModal')" class="text-gray-400 hover:text-gray-600">
                     <i class="fas fa-times text-xl"></i>
                 </button>
@@ -1252,7 +1370,7 @@ $products = mysqli_query($conn, "
                                     </div>
                                     <div>
                                         <p class="text-xs text-gray-500">Price</p>
-                                        <p class="font-medium">$${parseFloat(product.price).toFixed(2)}</p>
+                                        <p class="font-medium">₵${parseFloat(product.price).toFixed(2)}</p>
                                     </div>
                                 </div>
                             </div>
