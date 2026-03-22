@@ -27,8 +27,8 @@ $month_name = date('F', mktime(0, 0, 0, $month, 1));
 $monthly_summary = mysqli_query($conn, "
     SELECT 
         COUNT(DISTINCT product_id) as products_moved,
-        SUM(CASE WHEN change_type = 'IN' THEN quantity ELSE 0 END) as total_in,
-        SUM(CASE WHEN change_type = 'OUT' THEN quantity ELSE 0 END) as total_out,
+        COALESCE(SUM(CASE WHEN change_type = 'IN' THEN quantity ELSE 0 END), 0) as total_in,
+        COALESCE(SUM(CASE WHEN change_type = 'OUT' THEN quantity ELSE 0 END), 0) as total_out,
         COUNT(*) as total_transactions
     FROM stock_logs
     WHERE MONTH(created_at) = $month AND YEAR(created_at) = $year
@@ -42,9 +42,9 @@ $monthly_data = mysqli_fetch_assoc($monthly_summary);
 $inventory_summary = mysqli_query($conn, "
     SELECT 
         COUNT(*) as total_products,
-        SUM(quantity) as total_stock,
-        SUM(price * quantity) as total_value,
-        SUM(CASE WHEN quantity < 10 THEN 1 ELSE 0 END) as low_stock
+        COALESCE(SUM(quantity), 0) as total_stock,
+        COALESCE(SUM(price * quantity), 0) as total_value,
+        COALESCE(SUM(CASE WHEN quantity < 10 THEN 1 ELSE 0 END), 0) as low_stock
     FROM products
 ");
 
@@ -85,9 +85,9 @@ $top_products = mysqli_query($conn, "
     SELECT 
         p.name,
         p.sku,
-        SUM(CASE WHEN sl.change_type = 'IN' THEN sl.quantity ELSE 0 END) as total_in,
-        SUM(CASE WHEN sl.change_type = 'OUT' THEN sl.quantity ELSE 0 END) as total_out,
-        SUM(sl.quantity) as total_movement
+        COALESCE(SUM(CASE WHEN sl.change_type = 'IN' THEN sl.quantity ELSE 0 END), 0) as total_in,
+        COALESCE(SUM(CASE WHEN sl.change_type = 'OUT' THEN sl.quantity ELSE 0 END), 0) as total_out,
+        COALESCE(SUM(sl.quantity), 0) as total_movement
     FROM products p
     LEFT JOIN stock_logs sl ON p.id = sl.product_id 
         AND MONTH(sl.created_at) = $month AND YEAR(sl.created_at) = $year
@@ -100,6 +100,7 @@ $top_products = mysqli_query($conn, "
 
 <!DOCTYPE html>
 <html>
+
 <head>
     <title>Reports - Inventory System</title>
     <script src="https://cdn.tailwindcss.com"></script>
@@ -110,6 +111,7 @@ $top_products = mysqli_query($conn, "
         }
     </style>
 </head>
+
 <body class="bg-gray-50 flex">
     <!-- ================= SIDEBAR ================= -->
     <?php include __DIR__ . '/sidebar.php'; ?>
@@ -122,19 +124,19 @@ $top_products = mysqli_query($conn, "
                 <h1 class="text-2xl font-bold text-gray-800">Reports</h1>
                 <p class="text-gray-500 text-sm mt-1">Simple overview of your inventory</p>
             </div>
-            
+
             <!-- Month Filter -->
             <form method="GET" class="mt-4 md:mt-0 flex space-x-2">
                 <select name="month" class="px-3 py-2 border border-gray-300 rounded-lg text-sm">
-                    <?php for($i = 1; $i <= 12; $i++): 
+                    <?php for ($i = 1; $i <= 12; $i++):
                         $name = date('F', mktime(0, 0, 0, $i, 1));
                     ?>
-                    <option value="<?= $i ?>" <?= $month == $i ? 'selected' : '' ?>><?= $name ?></option>
+                        <option value="<?= $i ?>" <?= $month == $i ? 'selected' : '' ?>><?= $name ?></option>
                     <?php endfor; ?>
                 </select>
                 <select name="year" class="px-3 py-2 border border-gray-300 rounded-lg text-sm">
-                    <?php for($i = date('Y'); $i >= date('Y')-2; $i--): ?>
-                    <option value="<?= $i ?>" <?= $year == $i ? 'selected' : '' ?>><?= $i ?></option>
+                    <?php for ($i = date('Y'); $i >= date('Y') - 2; $i--): ?>
+                        <option value="<?= $i ?>" <?= $year == $i ? 'selected' : '' ?>><?= $i ?></option>
                     <?php endfor; ?>
                 </select>
                 <button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700">
@@ -152,23 +154,23 @@ $top_products = mysqli_query($conn, "
                     </div>
                     <div class="ml-3">
                         <p class="text-xs text-gray-500">Total Products</p>
-                        <p class="text-xl font-semibold text-gray-800"><?= number_format($inv_data['total_products']) ?></p>
+                        <p class="text-xl font-semibold text-gray-800"><?= number_format((float)($inv_data['total_products'] ?? 0)) ?></p>
                     </div>
                 </div>
             </div>
-            
+
             <div class="bg-white p-4 rounded-lg shadow-sm border border-gray-100">
                 <div class="flex items-center">
                     <div class="w-10 h-10 bg-green-100 rounded-lg flex items-center justify-center">
-                        <i class="fas fa-dollar-sign text-green-600"></i>
+                        <i class="fas fa-cedi-sign text-green-600"></i>
                     </div>
                     <div class="ml-3">
                         <p class="text-xs text-gray-500">Inventory Value</p>
-                        <p class="text-xl font-semibold text-gray-800">$<?= number_format($inv_data['total_value'], 2) ?></p>
+                        <p class="text-xl font-semibold text-gray-800">₵<?= number_format((float)($inv_data['total_value'] ?? 0), 2) ?></p>
                     </div>
                 </div>
             </div>
-            
+
             <div class="bg-white p-4 rounded-lg shadow-sm border border-gray-100">
                 <div class="flex items-center">
                     <div class="w-10 h-10 bg-purple-100 rounded-lg flex items-center justify-center">
@@ -176,19 +178,19 @@ $top_products = mysqli_query($conn, "
                     </div>
                     <div class="ml-3">
                         <p class="text-xs text-gray-500">Monthly Movement</p>
-                        <p class="text-xl font-semibold text-gray-800"><?= number_format($monthly_data['total_transactions'] ?? 0) ?></p>
+                        <p class="text-xl font-semibold text-gray-800"><?= number_format((float)($monthly_data['total_transactions'] ?? 0)) ?></p>
                     </div>
                 </div>
             </div>
-            
+
             <div class="bg-white p-4 rounded-lg shadow-sm border border-gray-100">
                 <div class="flex items-center">
-                    <div class="w-10 h-10 <?= $inv_data['low_stock'] > 0 ? 'bg-red-100' : 'bg-yellow-100' ?> rounded-lg flex items-center justify-center">
-                        <i class="fas fa-exclamation-triangle <?= $inv_data['low_stock'] > 0 ? 'text-red-600' : 'text-yellow-600' ?>"></i>
+                    <div class="w-10 h-10 <?= ($inv_data['low_stock'] ?? 0) > 0 ? 'bg-red-100' : 'bg-yellow-100' ?> rounded-lg flex items-center justify-center">
+                        <i class="fas fa-exclamation-triangle <?= ($inv_data['low_stock'] ?? 0) > 0 ? 'text-red-600' : 'text-yellow-600' ?>"></i>
                     </div>
                     <div class="ml-3">
                         <p class="text-xs text-gray-500">Low Stock</p>
-                        <p class="text-xl font-semibold <?= $inv_data['low_stock'] > 0 ? 'text-red-600' : 'text-gray-800' ?>"><?= $inv_data['low_stock'] ?></p>
+                        <p class="text-xl font-semibold <?= ($inv_data['low_stock'] ?? 0) > 0 ? 'text-red-600' : 'text-gray-800' ?>"><?= (int)($inv_data['low_stock'] ?? 0) ?></p>
                     </div>
                 </div>
             </div>
@@ -200,15 +202,15 @@ $top_products = mysqli_query($conn, "
             <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div class="p-3 bg-green-50 rounded-lg">
                     <p class="text-xs text-green-600">Stock In</p>
-                    <p class="text-xl font-semibold text-green-700">+<?= number_format($monthly_data['total_in'] ?? 0) ?></p>
+                    <p class="text-xl font-semibold text-green-700">+<?= number_format((float)($monthly_data['total_in'] ?? 0)) ?></p>
                 </div>
                 <div class="p-3 bg-red-50 rounded-lg">
                     <p class="text-xs text-red-600">Stock Out</p>
-                    <p class="text-xl font-semibold text-red-700">-<?= number_format($monthly_data['total_out'] ?? 0) ?></p>
+                    <p class="text-xl font-semibold text-red-700">-<?= number_format((float)($monthly_data['total_out'] ?? 0)) ?></p>
                 </div>
                 <div class="p-3 bg-blue-50 rounded-lg">
                     <p class="text-xs text-blue-600">Net Movement</p>
-                    <p class="text-xl font-semibold text-blue-700"><?= number_format(($monthly_data['total_in'] ?? 0) - ($monthly_data['total_out'] ?? 0)) ?></p>
+                    <p class="text-xl font-semibold text-blue-700"><?= number_format((float)(($monthly_data['total_in'] ?? 0) - ($monthly_data['total_out'] ?? 0))) ?></p>
                 </div>
             </div>
         </div>
@@ -218,22 +220,22 @@ $top_products = mysqli_query($conn, "
             <!-- Top Products -->
             <div class="bg-white rounded-lg shadow-sm border border-gray-100 p-4">
                 <h2 class="text-lg font-semibold text-gray-800 mb-3">Top Moving Products</h2>
-                <?php if(mysqli_num_rows($top_products) > 0): ?>
+                <?php if (mysqli_num_rows($top_products) > 0): ?>
                     <div class="space-y-3">
-                        <?php while($p = mysqli_fetch_assoc($top_products)): ?>
-                        <div class="flex items-center justify-between p-2 hover:bg-gray-50 rounded">
-                            <div>
-                                <p class="font-medium text-gray-800"><?= htmlspecialchars($p['name']) ?></p>
-                                <p class="text-xs text-gray-500">SKU: <?= htmlspecialchars($p['sku']) ?></p>
+                        <?php while ($p = mysqli_fetch_assoc($top_products)): ?>
+                            <div class="flex items-center justify-between p-2 hover:bg-gray-50 rounded">
+                                <div>
+                                    <p class="font-medium text-gray-800"><?= htmlspecialchars($p['name']) ?></p>
+                                    <p class="text-xs text-gray-500">SKU: <?= htmlspecialchars($p['sku']) ?></p>
+                                </div>
+                                <div class="text-right">
+                                    <p class="text-sm font-semibold text-gray-800"><?= (int)$p['total_movement'] ?> units</p>
+                                    <p class="text-xs">
+                                        <span class="text-green-600">IN: <?= (int)$p['total_in'] ?></span>
+                                        <span class="text-red-600 ml-1">OUT: <?= (int)$p['total_out'] ?></span>
+                                    </p>
+                                </div>
                             </div>
-                            <div class="text-right">
-                                <p class="text-sm font-semibold text-gray-800"><?= $p['total_movement'] ?> units</p>
-                                <p class="text-xs">
-                                    <span class="text-green-600">IN: <?= $p['total_in'] ?></span>
-                                    <span class="text-red-600 ml-1">OUT: <?= $p['total_out'] ?></span>
-                                </p>
-                            </div>
-                        </div>
                         <?php endwhile; ?>
                     </div>
                 <?php else: ?>
@@ -244,19 +246,19 @@ $top_products = mysqli_query($conn, "
             <!-- Low Stock Alerts -->
             <div class="bg-white rounded-lg shadow-sm border border-gray-100 p-4">
                 <h2 class="text-lg font-semibold text-gray-800 mb-3">Low Stock Alert</h2>
-                <?php if(mysqli_num_rows($low_stock) > 0): ?>
+                <?php if (mysqli_num_rows($low_stock) > 0): ?>
                     <div class="space-y-3">
-                        <?php while($item = mysqli_fetch_assoc($low_stock)): ?>
-                        <div class="flex items-center justify-between p-2 hover:bg-gray-50 rounded">
-                            <div>
-                                <p class="font-medium text-gray-800"><?= htmlspecialchars($item['name']) ?></p>
-                                <p class="text-xs text-gray-500">SKU: <?= htmlspecialchars($item['sku']) ?></p>
+                        <?php while ($item = mysqli_fetch_assoc($low_stock)): ?>
+                            <div class="flex items-center justify-between p-2 hover:bg-gray-50 rounded">
+                                <div>
+                                    <p class="font-medium text-gray-800"><?= htmlspecialchars($item['name']) ?></p>
+                                    <p class="text-xs text-gray-500">SKU: <?= htmlspecialchars($item['sku']) ?></p>
+                                </div>
+                                <div class="text-right">
+                                    <p class="text-sm font-semibold text-red-600"><?= (int)$item['quantity'] ?> units</p>
+                                    <p class="text-xs text-gray-500">₵<?= number_format((float)$item['price'], 2) ?></p>
+                                </div>
                             </div>
-                            <div class="text-right">
-                                <p class="text-sm font-semibold text-red-600"><?= $item['quantity'] ?> units</p>
-                                <p class="text-xs text-gray-500">$<?= number_format($item['price'], 2) ?></p>
-                            </div>
-                        </div>
                         <?php endwhile; ?>
                     </div>
                 <?php else: ?>
@@ -283,24 +285,24 @@ $top_products = mysqli_query($conn, "
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-gray-100">
-                        <?php if(mysqli_num_rows($movements) > 0): ?>
-                            <?php while($m = mysqli_fetch_assoc($movements)): ?>
-                            <tr class="hover:bg-gray-50">
-                                <td class="px-4 py-2 text-gray-600"><?= date('M d, H:i', strtotime($m['date'])) ?></td>
-                                <td class="px-4 py-2 font-medium text-gray-800"><?= htmlspecialchars($m['product_name']) ?></td>
-                                <td class="px-4 py-2 text-gray-500 font-mono"><?= htmlspecialchars($m['sku']) ?></td>
-                                <td class="px-4 py-2">
-                                    <?php if($m['change_type'] == 'IN'): ?>
-                                        <span class="px-2 py-1 bg-green-100 text-green-600 rounded-full text-xs">IN</span>
-                                    <?php else: ?>
-                                        <span class="px-2 py-1 bg-red-100 text-red-600 rounded-full text-xs">OUT</span>
-                                    <?php endif; ?>
-                                </td>
-                                <td class="px-4 py-2 <?= $m['change_type'] == 'IN' ? 'text-green-600' : 'text-red-600' ?> font-semibold">
-                                    <?= $m['change_type'] == 'IN' ? '+' : '-' ?><?= $m['quantity'] ?>
-                                </td>
-                                <td class="px-4 py-2 text-gray-500"><?= htmlspecialchars($m['note'] ?? '-') ?></td>
-                            </tr>
+                        <?php if (mysqli_num_rows($movements) > 0): ?>
+                            <?php while ($m = mysqli_fetch_assoc($movements)): ?>
+                                <tr class="hover:bg-gray-50">
+                                    <td class="px-4 py-2 text-gray-600"><?= date('M d, H:i', strtotime($m['date'])) ?></td>
+                                    <td class="px-4 py-2 font-medium text-gray-800"><?= htmlspecialchars($m['product_name']) ?></td>
+                                    <td class="px-4 py-2 text-gray-500 font-mono"><?= htmlspecialchars($m['sku']) ?></td>
+                                    <td class="px-4 py-2">
+                                        <?php if ($m['change_type'] == 'IN'): ?>
+                                            <span class="px-2 py-1 bg-green-100 text-green-600 rounded-full text-xs">IN</span>
+                                        <?php else: ?>
+                                            <span class="px-2 py-1 bg-red-100 text-red-600 rounded-full text-xs">OUT</span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td class="px-4 py-2 <?= $m['change_type'] == 'IN' ? 'text-green-600' : 'text-red-600' ?> font-semibold">
+                                        <?= $m['change_type'] == 'IN' ? '+' : '-' ?><?= (int)$m['quantity'] ?>
+                                    </td>
+                                    <td class="px-4 py-2 text-gray-500"><?= htmlspecialchars($m['note'] ?? '-') ?></td>
+                                </tr>
                             <?php endwhile; ?>
                         <?php else: ?>
                             <tr>
@@ -324,4 +326,5 @@ $top_products = mysqli_query($conn, "
         </div>
     </div>
 </body>
+
 </html>
