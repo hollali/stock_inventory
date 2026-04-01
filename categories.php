@@ -11,6 +11,42 @@ error_reporting(E_ALL);
 // ------------------------------
 include './config/connect.php';
 
+function getPageNumber($key)
+{
+    if (!isset($_GET[$key])) {
+        return 1;
+    }
+    $value = (int)$_GET[$key];
+    return $value > 0 ? $value : 1;
+}
+
+function buildPageUrl($pageKey, $pageNumber)
+{
+    $params = $_GET;
+    $params[$pageKey] = $pageNumber;
+    return '?' . http_build_query($params);
+}
+
+function renderPagination($currentPage, $totalPages, $pageKey)
+{
+    if ($totalPages <= 1) {
+        return;
+    }
+?>
+    <div class="mt-6 flex items-center justify-between">
+        <span class="text-xs text-gray-500">Page <?= $currentPage ?> of <?= $totalPages ?></span>
+        <div class="flex items-center space-x-2">
+            <?php if ($currentPage > 1): ?>
+                <a href="<?= htmlspecialchars(buildPageUrl($pageKey, $currentPage - 1)) ?>" class="px-3 py-1 text-xs border border-gray-300 rounded-md text-gray-600 hover:bg-gray-50">Previous</a>
+            <?php endif; ?>
+            <?php if ($currentPage < $totalPages): ?>
+                <a href="<?= htmlspecialchars(buildPageUrl($pageKey, $currentPage + 1)) ?>" class="px-3 py-1 text-xs border border-gray-300 rounded-md text-gray-600 hover:bg-gray-50">Next</a>
+            <?php endif; ?>
+        </div>
+    </div>
+<?php
+}
+
 // ------------------------------
 // HANDLE ADD CATEGORY
 // ------------------------------
@@ -177,6 +213,15 @@ if (isset($_POST['action']) && $_POST['action'] == "export") {
 // ------------------------------
 // FETCH CATEGORIES WITH PRODUCT COUNT AND STATS
 // ------------------------------
+$categories_per_page = 12;
+$categories_page = getPageNumber('categories_page');
+$categories_total = mysqli_fetch_assoc(mysqli_query($conn, "SELECT COUNT(*) as count FROM categories"))['count'];
+$categories_total_pages = max(1, (int)ceil($categories_total / $categories_per_page));
+if ($categories_page > $categories_total_pages) {
+    $categories_page = $categories_total_pages;
+}
+$categories_offset = ($categories_page - 1) * $categories_per_page;
+
 $categories = mysqli_query($conn, "
     SELECT c.*, 
     COUNT(p.id) as product_count,
@@ -185,6 +230,7 @@ $categories = mysqli_query($conn, "
     LEFT JOIN products p ON c.id = p.category_id 
     GROUP BY c.id 
     ORDER BY c.name
+    LIMIT $categories_per_page OFFSET $categories_offset
 ");
 ?>
 
@@ -468,6 +514,7 @@ $categories = mysqli_query($conn, "
                 </div>
             <?php endif; ?>
         </div>
+        <?php renderPagination($categories_page, $categories_total_pages, 'categories_page'); ?>
     </div>
 
     <!-- Hidden total categories count -->

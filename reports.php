@@ -11,6 +11,42 @@ error_reporting(E_ALL);
 // ------------------------------
 include './config/connect.php';
 
+function getPageNumber($key)
+{
+    if (!isset($_GET[$key])) {
+        return 1;
+    }
+    $value = (int)$_GET[$key];
+    return $value > 0 ? $value : 1;
+}
+
+function buildPageUrl($pageKey, $pageNumber)
+{
+    $params = $_GET;
+    $params[$pageKey] = $pageNumber;
+    return '?' . http_build_query($params);
+}
+
+function renderPagination($currentPage, $totalPages, $pageKey)
+{
+    if ($totalPages <= 1) {
+        return;
+    }
+?>
+    <div class="mt-4 flex items-center justify-between">
+        <span class="text-xs text-gray-500">Page <?= $currentPage ?> of <?= $totalPages ?></span>
+        <div class="flex items-center space-x-2">
+            <?php if ($currentPage > 1): ?>
+                <a href="<?= htmlspecialchars(buildPageUrl($pageKey, $currentPage - 1)) ?>" class="px-3 py-1 text-xs border border-gray-300 rounded-md text-gray-600 hover:bg-gray-50">Previous</a>
+            <?php endif; ?>
+            <?php if ($currentPage < $totalPages): ?>
+                <a href="<?= htmlspecialchars(buildPageUrl($pageKey, $currentPage + 1)) ?>" class="px-3 py-1 text-xs border border-gray-300 rounded-md text-gray-600 hover:bg-gray-50">Next</a>
+            <?php endif; ?>
+        </div>
+    </div>
+<?php
+}
+
 // ------------------------------
 // HANDLE DATE FILTERS
 // ------------------------------
@@ -20,6 +56,21 @@ $report_type = $_GET['report_type'] ?? 'movement';
 
 // Get month name
 $month_name = date('F', mktime(0, 0, 0, $month, 1));
+
+// ------------------------------
+// PAGINATION SETTINGS
+// ------------------------------
+$movements_per_page = 20;
+$top_per_page = 5;
+$low_stock_per_page = 8;
+
+$movements_page = getPageNumber('movements_page');
+$top_page = getPageNumber('top_page');
+$low_stock_page = getPageNumber('low_stock_page');
+
+$movements_offset = ($movements_page - 1) * $movements_per_page;
+$top_offset = ($top_page - 1) * $top_per_page;
+$low_stock_offset = ($low_stock_page - 1) * $low_stock_per_page;
 
 // ------------------------------
 // FETCH MONTHLY SUMMARY
@@ -65,8 +116,33 @@ $movements = mysqli_query($conn, "
     JOIN products p ON sl.product_id = p.id
     WHERE MONTH(sl.created_at) = $month AND YEAR(sl.created_at) = $year
     ORDER BY sl.created_at DESC
-    LIMIT 50
+    LIMIT $movements_per_page OFFSET $movements_offset
 ");
+
+$movements_total = mysqli_fetch_assoc(mysqli_query($conn, "
+    SELECT COUNT(*) as count
+    FROM stock_logs sl
+    WHERE MONTH(sl.created_at) = $month AND YEAR(sl.created_at) = $year
+"))['count'];
+$movements_total_pages = max(1, (int)ceil($movements_total / $movements_per_page));
+if ($movements_page > $movements_total_pages) {
+    $movements_page = $movements_total_pages;
+    $movements_offset = ($movements_page - 1) * $movements_per_page;
+    $movements = mysqli_query($conn, "
+        SELECT 
+            DATE(sl.created_at) as date,
+            p.name as product_name,
+            p.sku,
+            sl.change_type,
+            sl.quantity,
+            sl.note
+        FROM stock_logs sl
+        JOIN products p ON sl.product_id = p.id
+        WHERE MONTH(sl.created_at) = $month AND YEAR(sl.created_at) = $year
+        ORDER BY sl.created_at DESC
+        LIMIT $movements_per_page OFFSET $movements_offset
+    ");
+}
 
 // ------------------------------
 // FETCH LOW STOCK PRODUCTS
@@ -76,7 +152,26 @@ $low_stock = mysqli_query($conn, "
     FROM products
     WHERE quantity < 10
     ORDER BY quantity ASC
+    LIMIT $low_stock_per_page OFFSET $low_stock_offset
 ");
+
+$low_stock_total = mysqli_fetch_assoc(mysqli_query($conn, "
+    SELECT COUNT(*) as count
+    FROM products
+    WHERE quantity < 10
+"))['count'];
+$low_stock_total_pages = max(1, (int)ceil($low_stock_total / $low_stock_per_page));
+if ($low_stock_page > $low_stock_total_pages) {
+    $low_stock_page = $low_stock_total_pages;
+    $low_stock_offset = ($low_stock_page - 1) * $low_stock_per_page;
+    $low_stock = mysqli_query($conn, "
+        SELECT name, sku, quantity, price
+        FROM products
+        WHERE quantity < 10
+        ORDER BY quantity ASC
+        LIMIT $low_stock_per_page OFFSET $low_stock_offset
+    ");
+}
 
 // ------------------------------
 // FETCH TOP PRODUCTS
@@ -94,8 +189,39 @@ $top_products = mysqli_query($conn, "
     GROUP BY p.id
     HAVING total_movement > 0
     ORDER BY total_movement DESC
-    LIMIT 5
+    LIMIT $top_per_page OFFSET $top_offset
 ");
+
+$top_total = mysqli_fetch_assoc(mysqli_query($conn, "
+    SELECT COUNT(*) as count FROM (
+        SELECT p.id
+        FROM products p
+        LEFT JOIN stock_logs sl ON p.id = sl.product_id 
+            AND MONTH(sl.created_at) = $month AND YEAR(sl.created_at) = $year
+        GROUP BY p.id
+        HAVING COALESCE(SUM(sl.quantity), 0) > 0
+    ) as top_groups
+"))['count'];
+$top_total_pages = max(1, (int)ceil($top_total / $top_per_page));
+if ($top_page > $top_total_pages) {
+    $top_page = $top_total_pages;
+    $top_offset = ($top_page - 1) * $top_per_page;
+    $top_products = mysqli_query($conn, "
+        SELECT 
+            p.name,
+            p.sku,
+            COALESCE(SUM(CASE WHEN sl.change_type = 'IN' THEN sl.quantity ELSE 0 END), 0) as total_in,
+            COALESCE(SUM(CASE WHEN sl.change_type = 'OUT' THEN sl.quantity ELSE 0 END), 0) as total_out,
+            COALESCE(SUM(sl.quantity), 0) as total_movement
+        FROM products p
+        LEFT JOIN stock_logs sl ON p.id = sl.product_id 
+            AND MONTH(sl.created_at) = $month AND YEAR(sl.created_at) = $year
+        GROUP BY p.id
+        HAVING total_movement > 0
+        ORDER BY total_movement DESC
+        LIMIT $top_per_page OFFSET $top_offset
+    ");
+}
 ?>
 
 <!DOCTYPE html>
@@ -238,6 +364,7 @@ $top_products = mysqli_query($conn, "
                             </div>
                         <?php endwhile; ?>
                     </div>
+                    <?php renderPagination($top_page, $top_total_pages, 'top_page'); ?>
                 <?php else: ?>
                     <p class="text-gray-500 text-sm text-center py-4">No movement this month</p>
                 <?php endif; ?>
@@ -261,6 +388,7 @@ $top_products = mysqli_query($conn, "
                             </div>
                         <?php endwhile; ?>
                     </div>
+                    <?php renderPagination($low_stock_page, $low_stock_total_pages, 'low_stock_page'); ?>
                 <?php else: ?>
                     <p class="text-gray-500 text-sm text-center py-4">No low stock items</p>
                 <?php endif; ?>
@@ -314,6 +442,9 @@ $top_products = mysqli_query($conn, "
                         <?php endif; ?>
                     </tbody>
                 </table>
+            </div>
+            <div class="px-4 pb-4">
+                <?php renderPagination($movements_page, $movements_total_pages, 'movements_page'); ?>
             </div>
         </div>
 
