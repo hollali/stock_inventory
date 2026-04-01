@@ -19,8 +19,9 @@ if (isset($_POST['action']) && $_POST['action'] == "add") {
     $sku = mysqli_real_escape_string($conn, $_POST['sku']);
     $price = $_POST['price'];
     $quantity = $_POST['quantity'] ?? 0;
+    $category_id = isset($_POST['category_id']) && $_POST['category_id'] != '' ? (int)$_POST['category_id'] : 'NULL';
 
-    mysqli_query($conn, "INSERT INTO products (name, sku, price, quantity) VALUES ('$name','$sku','$price', $quantity)");
+    mysqli_query($conn, "INSERT INTO products (name, sku, price, quantity, category_id) VALUES ('$name','$sku','$price', $quantity, $category_id)");
 
     // Log the activity
     $product_id = mysqli_insert_id($conn);
@@ -38,8 +39,9 @@ if (isset($_POST['action']) && $_POST['action'] == "edit") {
     $name = mysqli_real_escape_string($conn, $_POST['name']);
     $sku = mysqli_real_escape_string($conn, $_POST['sku']);
     $price = $_POST['price'];
+    $category_id = isset($_POST['category_id']) && $_POST['category_id'] != '' ? (int)$_POST['category_id'] : 'NULL';
 
-    mysqli_query($conn, "UPDATE products SET name='$name', sku='$sku', price='$price' WHERE id=$id");
+    mysqli_query($conn, "UPDATE products SET name='$name', sku='$sku', price='$price', category_id=$category_id WHERE id=$id");
     exit("success");
 }
 
@@ -58,12 +60,17 @@ if (isset($_POST['action']) && $_POST['action'] == "delete") {
 }
 
 // ------------------------------
-// FETCH PRODUCTS FOR TABLE
+// FETCH CATEGORIES FOR DROPDOWN
 // ------------------------------
-$products = mysqli_query($conn, "SELECT * FROM products ORDER BY id DESC LIMIT 10");
+$categories = mysqli_query($conn, "SELECT * FROM categories ORDER BY name");
 
 // ------------------------------
-// FETCH DASHBOARD STATS
+// FETCH PRODUCTS FOR TABLE
+// ------------------------------
+$products = mysqli_query($conn, "SELECT p.*, c.name as category_name FROM products p LEFT JOIN categories c ON p.category_id = c.id ORDER BY p.id DESC LIMIT 10");
+
+// ------------------------------
+// FETCH DASHBOARD STATS - FIXED CALCULATIONS
 // ------------------------------
 $total_products = mysqli_fetch_assoc(mysqli_query($conn, "SELECT COUNT(*) as count FROM products"))['count'];
 $total_stock = mysqli_fetch_assoc(mysqli_query($conn, "SELECT COALESCE(SUM(quantity), 0) as total FROM products"))['total'];
@@ -71,49 +78,36 @@ $total_value = mysqli_fetch_assoc(mysqli_query($conn, "SELECT COALESCE(SUM(price
 $low_stock = mysqli_fetch_assoc(mysqli_query($conn, "SELECT COUNT(*) as count FROM products WHERE quantity < 10"))['count'];
 
 // ------------------------------
-// FETCH CATEGORY STATISTICS
+// FETCH CATEGORY STATISTICS - FIXED: USING category_id IN products TABLE
 // ------------------------------
-// Since categories table exists but no product_categories junction yet,
-// we'll create a default "Uncategorized" category for now
 $category_stats = mysqli_query($conn, "
     SELECT 
-        'All Products' as category_name,
-        COUNT(*) as product_count,
-        COALESCE(SUM(quantity), 0) as total_items,
-        COALESCE(SUM(price * quantity), 0) as total_value
-    FROM products
-    UNION ALL
-    SELECT 
-        'Uncategorized' as category_name,
-        COUNT(*) as product_count,
-        COALESCE(SUM(quantity), 0) as total_items,
-        COALESCE(SUM(price * quantity), 0) as total_value
-    FROM products
+        COALESCE(c.name, 'Uncategorized') as category_name,
+        COUNT(DISTINCT p.id) as product_count,
+        COALESCE(SUM(p.quantity), 0) as total_items,
+        COALESCE(SUM(p.price * p.quantity), 0) as total_value
+    FROM products p
+    LEFT JOIN categories c ON p.category_id = c.id
+    GROUP BY COALESCE(c.name, 'Uncategorized')
+    ORDER BY total_value DESC
 ");
 
 // ------------------------------
-// FETCH SALES STATISTICS
+// FETCH SALES STATISTICS - FIXED: CORRECT AGGREGATION
 // ------------------------------
 $sales_stats = mysqli_query($conn, "
     SELECT 
-        'All Products' as category_name,
+        COALESCE(c.name, 'Uncategorized') as category_name,
         COUNT(DISTINCT sl.product_id) as products_sold,
         COALESCE(SUM(sl.quantity), 0) as total_items_sold,
         COALESCE(SUM(sl.quantity * p.price), 0) as total_sales_amount
     FROM stock_logs sl
     JOIN products p ON sl.product_id = p.id
+    LEFT JOIN categories c ON p.category_id = c.id
     WHERE sl.change_type = 'OUT'
     AND sl.created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
-    UNION ALL
-    SELECT 
-        'Uncategorized' as category_name,
-        COUNT(DISTINCT sl.product_id) as products_sold,
-        COALESCE(SUM(sl.quantity), 0) as total_items_sold,
-        COALESCE(SUM(sl.quantity * p.price), 0) as total_sales_amount
-    FROM stock_logs sl
-    JOIN products p ON sl.product_id = p.id
-    WHERE sl.change_type = 'OUT'
-    AND sl.created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+    GROUP BY COALESCE(c.name, 'Uncategorized')
+    ORDER BY total_sales_amount DESC
 ");
 
 $total_sales_summary = mysqli_fetch_assoc(mysqli_query($conn, "
@@ -131,14 +125,15 @@ $total_items_sold = $total_sales_summary['total_items_sold'] ?? 0;
 $total_revenue = $total_sales_summary['total_revenue'] ?? 0;
 
 // ------------------------------
-// FETCH RECENT ACTIVITIES (LAST 7 DAYS)
+// FETCH RECENT ACTIVITIES (LAST 7 DAYS) - WITH REAL-TIME TIMESTAMP
 // ------------------------------
 $recent_activities = mysqli_query($conn, "
     SELECT 
         sl.*,
         p.name as product_name,
         p.sku as product_sku,
-        DATE(sl.created_at) as activity_date
+        sl.created_at as activity_timestamp,
+        UNIX_TIMESTAMP(sl.created_at) as activity_unix_timestamp
     FROM stock_logs sl
     JOIN products p ON sl.product_id = p.id
     WHERE sl.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
@@ -160,7 +155,7 @@ $stock_summary = mysqli_query($conn, "
 ");
 
 // ------------------------------
-// FETCH TOP PRODUCTS BY MOVEMENT - FIXED THE AMBIGUOUS COLUMN ERROR
+// FETCH TOP PRODUCTS BY MOVEMENT
 // ------------------------------
 $top_products = mysqli_query($conn, "
     SELECT 
@@ -214,6 +209,26 @@ $top_products = mysqli_query($conn, "
             width: 2px;
             background: #e5e7eb;
         }
+
+        /* Real-time timestamp styling */
+        .time-ago {
+            font-family: monospace;
+            font-size: 0.7rem;
+        }
+
+        .timestamp-updated {
+            animation: pulse 0.3s ease-in-out;
+        }
+
+        @keyframes pulse {
+            0% {
+                opacity: 0.5;
+            }
+
+            100% {
+                opacity: 1;
+            }
+        }
     </style>
 </head>
 
@@ -223,10 +238,18 @@ $top_products = mysqli_query($conn, "
 
     <!-- ================= MAIN CONTENT ================= -->
     <div id="mainContent" class="flex-1 lg:ml-72 p-4 md:p-6 lg:p-8 transition-margin">
-        <!-- Welcome Section -->
-        <div class="mb-8">
-            <h1 class="text-2xl md:text-3xl font-bold text-gray-800">Welcome back, Admin</h1>
-            <p class="text-gray-500 mt-1">Here's what's happening with your inventory today.</p>
+        <!-- Welcome Section with Real-time Clock -->
+        <div class="mb-8 flex justify-between items-center flex-wrap gap-4">
+            <div>
+                <h1 class="text-2xl md:text-3xl font-bold text-gray-800">Welcome back, Adelaide</h1>
+                <p class="text-gray-500 mt-1">Here's what's happening with your inventory today.</p>
+            </div>
+            <div class="bg-white rounded-lg shadow-sm px-4 py-2 border border-gray-100">
+                <div class="flex items-center space-x-2">
+                    <i class="fas fa-clock text-blue-500"></i>
+                    <span id="realTimeClock" class="text-gray-700 font-mono text-sm"></span>
+                </div>
+            </div>
         </div>
 
         <!-- Stats Grid -->
@@ -331,27 +354,34 @@ $top_products = mysqli_query($conn, "
                         $grand_total_value += (float)$cat['total_value'];
                     }
 
-                    // Display only unique categories (in this case, just show one row since we only have Uncategorized)
                     if (!empty($cat_data)):
-                        $cat = $cat_data[0]; // Use the first row
+                        foreach ($cat_data as $cat):
                     ?>
-                        <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors">
-                            <div class="flex-1">
-                                <div class="flex items-center">
-                                    <span class="font-medium text-gray-800">All Products</span>
-                                    <span class="ml-2 text-xs text-gray-500">(<?= (int)$cat['product_count'] ?> products)</span>
-                                </div>
-                                <div class="flex items-center mt-1">
-                                    <div class="w-24 h-2 bg-gray-200 rounded-full mr-2">
-                                        <div class="h-2 bg-blue-600 rounded-full" style="width: 100%"></div>
+                            <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors">
+                                <div class="flex-1">
+                                    <div class="flex items-center">
+                                        <span class="font-medium text-gray-800"><?= htmlspecialchars($cat['category_name']) ?></span>
+                                        <span class="ml-2 text-xs text-gray-500">(<?= (int)$cat['product_count'] ?> products)</span>
                                     </div>
-                                    <span class="text-xs text-gray-600"><?= number_format((float)$cat['total_items']) ?> units</span>
+                                    <div class="flex items-center mt-1">
+                                        <?php $percentage = $grand_total_items > 0 ? ($cat['total_items'] / $grand_total_items) * 100 : 0; ?>
+                                        <div class="w-24 h-2 bg-gray-200 rounded-full mr-2">
+                                            <div class="h-2 bg-blue-600 rounded-full" style="width: <?= $percentage ?>%"></div>
+                                        </div>
+                                        <span class="text-xs text-gray-600"><?= number_format((float)$cat['total_items']) ?> units</span>
+                                    </div>
+                                </div>
+                                <div class="text-right">
+                                    <span class="text-sm font-semibold text-gray-800">₵<?= number_format((float)$cat['total_value'], 2) ?></span>
+                                    <span class="text-xs text-gray-500 block">value</span>
                                 </div>
                             </div>
-                            <div class="text-right">
-                                <span class="text-sm font-semibold text-gray-800">₵<?= number_format((float)$cat['total_value'], 2) ?></span>
-                                <span class="text-xs text-gray-500 block">value</span>
-                            </div>
+                        <?php
+                        endforeach;
+                    else:
+                        ?>
+                        <div class="text-center py-4 text-gray-500">
+                            <p class="text-sm">No category data available</p>
                         </div>
                     <?php endif; ?>
 
@@ -384,34 +414,45 @@ $top_products = mysqli_query($conn, "
                     <div class="space-y-4">
                         <?php
                         mysqli_data_seek($sales_stats, 0);
-                        $sale_data = mysqli_fetch_assoc($sales_stats);
+                        $grand_sales_items = 0;
+                        $grand_sales_revenue = 0;
+                        $sale_categories = [];
+                        while ($sale = mysqli_fetch_assoc($sales_stats)) {
+                            $sale_categories[] = $sale;
+                            $grand_sales_items += (float)($sale['total_items_sold'] ?? 0);
+                            $grand_sales_revenue += (float)($sale['total_sales_amount'] ?? 0);
+                        }
+
+                        foreach ($sale_categories as $sale):
                         ?>
-                        <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors">
-                            <div class="flex-1">
-                                <div class="flex items-center">
-                                    <span class="font-medium text-gray-800">All Products</span>
-                                    <span class="ml-2 text-xs text-gray-500">(<?= (int)($sale_data['products_sold'] ?? 0) ?> products)</span>
-                                </div>
-                                <div class="flex items-center mt-1">
-                                    <div class="w-24 h-2 bg-gray-200 rounded-full mr-2">
-                                        <div class="h-2 bg-green-600 rounded-full" style="width: 100%"></div>
+                            <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors">
+                                <div class="flex-1">
+                                    <div class="flex items-center">
+                                        <span class="font-medium text-gray-800"><?= htmlspecialchars($sale['category_name']) ?></span>
+                                        <span class="ml-2 text-xs text-gray-500">(<?= (int)($sale['products_sold'] ?? 0) ?> products)</span>
                                     </div>
-                                    <span class="text-xs text-gray-600"><?= number_format((float)($sale_data['total_items_sold'] ?? 0)) ?> units</span>
+                                    <div class="flex items-center mt-1">
+                                        <?php $percentage = $grand_sales_items > 0 ? (($sale['total_items_sold'] ?? 0) / $grand_sales_items) * 100 : 0; ?>
+                                        <div class="w-24 h-2 bg-gray-200 rounded-full mr-2">
+                                            <div class="h-2 bg-green-600 rounded-full" style="width: <?= $percentage ?>%"></div>
+                                        </div>
+                                        <span class="text-xs text-gray-600"><?= number_format((float)($sale['total_items_sold'] ?? 0)) ?> units</span>
+                                    </div>
+                                </div>
+                                <div class="text-right">
+                                    <span class="text-sm font-semibold text-gray-800">₵<?= number_format((float)($sale['total_sales_amount'] ?? 0), 2) ?></span>
+                                    <span class="text-xs text-gray-500 block">revenue</span>
                                 </div>
                             </div>
-                            <div class="text-right">
-                                <span class="text-sm font-semibold text-gray-800">₵<?= number_format((float)$total_revenue, 2) ?></span>
-                                <span class="text-xs text-gray-500 block">revenue</span>
-                            </div>
-                        </div>
+                        <?php endforeach; ?>
 
                         <!-- Total Revenue -->
                         <div class="mt-4 pt-4 border-t border-gray-200">
                             <div class="flex justify-between items-center">
                                 <span class="text-sm font-semibold text-gray-700">Total Revenue:</span>
                                 <div class="text-right">
-                                    <span class="text-sm font-bold text-gray-900"><?= number_format((float)$total_items_sold) ?> units</span>
-                                    <span class="text-sm font-bold text-green-600 block">₵<?= number_format((float)$total_revenue, 2) ?></span>
+                                    <span class="text-sm font-bold text-gray-900"><?= number_format((float)$grand_sales_items) ?> units</span>
+                                    <span class="text-sm font-bold text-green-600 block">₵<?= number_format((float)$grand_sales_revenue, 2) ?></span>
                                 </div>
                             </div>
                         </div>
@@ -498,33 +539,33 @@ $top_products = mysqli_query($conn, "
                 </div>
             </div>
 
-            <!-- Recent Activities Timeline -->
+            <!-- Recent Activities Timeline with Real-time Timestamps -->
             <div class="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
                 <div class="flex items-center justify-between mb-6">
                     <h2 class="text-lg font-semibold text-gray-800">Recent Activities</h2>
-                    <span class="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded">Last 7 days</span>
+                    <div class="flex items-center space-x-2">
+                        <span class="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded">Last 7 days</span>
+                        <button onclick="refreshTimestamps()" class="text-gray-400 hover:text-gray-600 transition-colors" title="Refresh timestamps">
+                            <i class="fas fa-sync-alt text-xs"></i>
+                        </button>
+                    </div>
                 </div>
 
-                <div class="activity-timeline space-y-4 max-h-96 overflow-y-auto pr-4">
+                <div class="activity-timeline space-y-4 max-h-96 overflow-y-auto pr-4" id="activityTimeline">
                     <?php if (mysqli_num_rows($recent_activities) > 0): ?>
-                        <?php while ($activity = mysqli_fetch_assoc($recent_activities)):
-                            $time = strtotime($activity['created_at']);
-                            $now = time();
-                            $diff = $now - $time;
-
-                            if ($diff < 60) {
-                                $time_ago = 'just now';
-                            } elseif ($diff < 3600) {
-                                $minutes = floor($diff / 60);
-                                $time_ago = $minutes . ' minute' . ($minutes > 1 ? 's' : '') . ' ago';
-                            } elseif ($diff < 86400) {
-                                $hours = floor($diff / 3600);
-                                $time_ago = $hours . ' hour' . ($hours > 1 ? 's' : '') . ' ago';
-                            } else {
-                                $time_ago = date('M d, H:i', $time);
+                        <?php
+                        $activities_data = [];
+                        while ($activity = mysqli_fetch_assoc($recent_activities)) {
+                            $activities_data[] = $activity;
+                        }
+                        ?>
+                        <?php foreach ($activities_data as $activity):
+                            $timestamp = (int)($activity['activity_unix_timestamp'] ?? 0);
+                            if ($timestamp <= 0) {
+                                $timestamp = strtotime($activity['activity_timestamp']);
                             }
                         ?>
-                            <div class="flex items-start ml-8 relative">
+                            <div class="flex items-start ml-8 relative activity-item" data-timestamp="<?= $timestamp ?>" data-original-time="<?= htmlspecialchars($activity['activity_timestamp']) ?>">
                                 <div class="absolute -left-8 mt-1.5">
                                     <?php if ($activity['change_type'] == 'IN'): ?>
                                         <div class="w-4 h-4 bg-green-500 rounded-full border-2 border-white shadow"></div>
@@ -547,10 +588,12 @@ $top_products = mysqli_query($conn, "
                                             · <?= htmlspecialchars($activity['note']) ?>
                                         <?php endif; ?>
                                     </p>
-                                    <p class="text-xs text-gray-400 mt-1"><?= $time_ago ?></p>
+                                    <p class="text-xs text-gray-400 mt-1 time-ago" id="timeAgo-<?= $timestamp ?>">
+                                        <?= getTimeAgo($timestamp) ?>
+                                    </p>
                                 </div>
                             </div>
-                        <?php endwhile; ?>
+                        <?php endforeach; ?>
                     <?php else: ?>
                         <div class="text-center py-8 text-gray-500">
                             <i class="fas fa-history text-4xl mb-3 text-gray-300"></i>
@@ -599,10 +642,13 @@ $top_products = mysqli_query($conn, "
             </div>
         </div>
 
-        <!-- Recent Products Table (Actions Removed) -->
+        <!-- Recent Products Table -->
         <div class="bg-white rounded-xl shadow-sm overflow-hidden border border-gray-100">
             <div class="px-6 py-4 border-b border-gray-100 flex justify-between items-center">
                 <h2 class="text-lg font-semibold text-gray-800">Recently Added Products</h2>
+                <button onclick="openModal('addModal')" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors duration-200">
+                    <i class="fas fa-plus mr-2"></i>Add Product
+                </button>
             </div>
             <div class="overflow-x-auto">
                 <table class="w-full">
@@ -610,9 +656,11 @@ $top_products = mysqli_query($conn, "
                         <tr>
                             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Product</th>
                             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">SKU</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Category</th>
                             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Stock Level</th>
                             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Price</th>
                             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-gray-100">
@@ -630,6 +678,7 @@ $top_products = mysqli_query($conn, "
                                         </div>
                                     </td>
                                     <td class="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-500"><?= htmlspecialchars($row['sku']) ?></td>
+                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600"><?= htmlspecialchars($row['category_name'] ?? 'Uncategorized') ?></td>
                                     <td class="px-6 py-4 whitespace-nowrap">
                                         <div class="flex items-center">
                                             <span class="text-sm text-gray-600 mr-2"><?= (int)$row['quantity'] ?></span>
@@ -648,11 +697,19 @@ $top_products = mysqli_query($conn, "
                                             <span class="px-2 py-1 text-xs rounded-full bg-green-100 text-green-600">Good</span>
                                         <?php endif; ?>
                                     </td>
+                                    <td class="px-6 py-4 whitespace-nowrap">
+                                        <button onclick='openEditModal(<?= $row['id'] ?>, "<?= addslashes($row['name']) ?>", "<?= addslashes($row['sku']) ?>", <?= $row['price'] ?>, <?= $row['category_id'] ?? 'null' ?>)' class="text-blue-600 hover:text-blue-800 mr-3">
+                                            <i class="fas fa-edit"></i>
+                                        </button>
+                                        <button onclick='openDeleteModal(<?= $row['id'] ?>)' class="text-red-600 hover:text-red-800">
+                                            <i class="fas fa-trash"></i>
+                                        </button>
+                                    </td>
                                 </tr>
                             <?php } ?>
                         <?php else: ?>
                             <tr>
-                                <td colspan="5" class="px-6 py-8 text-center text-gray-500">
+                                <td colspan="7" class="px-6 py-8 text-center text-gray-500">
                                     <i class="fas fa-box-open text-4xl mb-3 text-gray-300"></i>
                                     <p class="text-sm">No products found. Click "Add Product" to create one.</p>
                                 </td>
@@ -691,6 +748,18 @@ $top_products = mysqli_query($conn, "
                     <label class="block text-sm font-medium text-gray-700 mb-2">SKU</label>
                     <input type="text" name="sku" placeholder="Enter SKU"
                         class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" required>
+                </div>
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Category</label>
+                    <select name="category_id" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        <option value="">-- Select Category --</option>
+                        <?php
+                        mysqli_data_seek($categories, 0);
+                        while ($cat = mysqli_fetch_assoc($categories)):
+                        ?>
+                            <option value="<?= $cat['id'] ?>"><?= htmlspecialchars($cat['name']) ?></option>
+                        <?php endwhile; ?>
+                    </select>
                 </div>
                 <div class="mb-4">
                     <label class="block text-sm font-medium text-gray-700 mb-2">Price (₵)</label>
@@ -737,6 +806,18 @@ $top_products = mysqli_query($conn, "
                         class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" required>
                 </div>
                 <div class="mb-4">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Category</label>
+                    <select name="category_id" id="edit_category_id" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        <option value="">-- Select Category --</option>
+                        <?php
+                        mysqli_data_seek($categories, 0);
+                        while ($cat = mysqli_fetch_assoc($categories)):
+                        ?>
+                            <option value="<?= $cat['id'] ?>"><?= htmlspecialchars($cat['name']) ?></option>
+                        <?php endwhile; ?>
+                    </select>
+                </div>
+                <div class="mb-4">
                     <label class="block text-sm font-medium text-gray-700 mb-2">Price (₵)</label>
                     <input type="number" name="price" id="edit_price" step="0.01"
                         class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" required>
@@ -777,8 +858,78 @@ $top_products = mysqli_query($conn, "
         </div>
     </div>
 
-    <!-- JavaScript Functions -->
+    <!-- JavaScript Functions with Real-time Updates -->
     <script>
+        // Helper function to get time ago string
+        function getTimeAgo(timestamp) {
+            const now = Math.floor(Date.now() / 1000);
+            const diff = now - timestamp;
+
+            if (diff < 60) {
+                return 'just now';
+            } else if (diff < 3600) {
+                const minutes = Math.floor(diff / 60);
+                return minutes + ' minute' + (minutes > 1 ? 's' : '') + ' ago';
+            } else if (diff < 86400) {
+                const hours = Math.floor(diff / 3600);
+                return hours + ' hour' + (hours > 1 ? 's' : '') + ' ago';
+            } else if (diff < 604800) {
+                const days = Math.floor(diff / 86400);
+                return days + ' day' + (days > 1 ? 's' : '') + ' ago';
+            } else {
+                const date = new Date(timestamp * 1000);
+                return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], {
+                    hour: '2-digit',
+                    minute: '2-digit'
+                });
+            }
+        }
+
+        // Update all timestamps in real-time
+        function updateAllTimestamps() {
+            const activityItems = document.querySelectorAll('.activity-item');
+            activityItems.forEach(item => {
+                const timestamp = parseInt(item.getAttribute('data-timestamp'));
+                if (!isNaN(timestamp)) {
+                    const timeSpan = item.querySelector('.time-ago');
+                    if (timeSpan) {
+                        const newTimeAgo = getTimeAgo(timestamp);
+                        if (timeSpan.textContent !== newTimeAgo) {
+                            timeSpan.textContent = newTimeAgo;
+                            timeSpan.classList.add('timestamp-updated');
+                            setTimeout(() => {
+                                timeSpan.classList.remove('timestamp-updated');
+                            }, 300);
+                        }
+                    }
+                }
+            });
+        }
+
+        // Refresh timestamps manually
+        function refreshTimestamps() {
+            updateAllTimestamps();
+            showToast('Timestamps refreshed', 'success');
+        }
+
+        // Real-time clock update
+        function updateRealTimeClock() {
+            const now = new Date();
+            const options = {
+                year: 'numeric',
+                month: 'short',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                hour12: true
+            };
+            const clockElement = document.getElementById('realTimeClock');
+            if (clockElement) {
+                clockElement.textContent = now.toLocaleString('en-US', options);
+            }
+        }
+
         // Modal functions
         function openModal(modalId) {
             document.getElementById(modalId).classList.remove('hidden');
@@ -789,11 +940,15 @@ $top_products = mysqli_query($conn, "
         }
 
         // Edit modal functions
-        function openEditModal(id, name, sku, price) {
+        function openEditModal(id, name, sku, price, categoryId) {
             document.getElementById('edit_id').value = id;
             document.getElementById('edit_name').value = name;
             document.getElementById('edit_sku').value = sku;
             document.getElementById('edit_price').value = price;
+            const categorySelect = document.getElementById('edit_category_id');
+            if (categoryId && categorySelect) {
+                categorySelect.value = categoryId;
+            }
             openModal('editModal');
         }
 
@@ -807,15 +962,16 @@ $top_products = mysqli_query($conn, "
         function showToast(message, type = 'success') {
             const toast = document.getElementById('toast');
             const toastMessage = document.getElementById('toastMessage');
+            const toastDiv = toast.querySelector('div');
 
             toastMessage.textContent = message;
 
             if (type === 'error') {
-                toast.querySelector('div').classList.remove('bg-green-500');
-                toast.querySelector('div').classList.add('bg-red-500');
+                toastDiv.classList.remove('bg-green-500');
+                toastDiv.classList.add('bg-red-500');
             } else {
-                toast.querySelector('div').classList.remove('bg-red-500');
-                toast.querySelector('div').classList.add('bg-green-500');
+                toastDiv.classList.remove('bg-red-500');
+                toastDiv.classList.add('bg-green-500');
             }
 
             toast.classList.remove('hidden');
@@ -915,7 +1071,42 @@ $top_products = mysqli_query($conn, "
                 }
             });
         }
+
+        // Initialize real-time features
+        document.addEventListener('DOMContentLoaded', function() {
+            // Update clock immediately
+            updateRealTimeClock();
+            // Update timestamps immediately
+            updateAllTimestamps();
+
+            // Set intervals for real-time updates
+            setInterval(updateRealTimeClock, 1000); // Update clock every second
+            setInterval(updateAllTimestamps, 30000); // Update timestamps every 30 seconds
+        });
     </script>
 </body>
 
 </html>
+<?php
+// Helper function for time ago calculation (PHP fallback)
+function getTimeAgo($timestamp)
+{
+    $now = time();
+    $diff = $now - $timestamp;
+
+    if ($diff < 60) {
+        return 'just now';
+    } elseif ($diff < 3600) {
+        $minutes = floor($diff / 60);
+        return $minutes . ' minute' . ($minutes > 1 ? 's' : '') . ' ago';
+    } elseif ($diff < 86400) {
+        $hours = floor($diff / 3600);
+        return $hours . ' hour' . ($hours > 1 ? 's' : '') . ' ago';
+    } elseif ($diff < 604800) {
+        $days = floor($diff / 86400);
+        return $days . ' day' . ($days > 1 ? 's' : '') . ' ago';
+    } else {
+        return date('M d, H:i', $timestamp);
+    }
+}
+?>
