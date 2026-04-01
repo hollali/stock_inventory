@@ -11,6 +11,42 @@ error_reporting(E_ALL);
 // ------------------------------
 include './config/connect.php';
 
+function getPageNumber($key)
+{
+    if (!isset($_GET[$key])) {
+        return 1;
+    }
+    $value = (int)$_GET[$key];
+    return $value > 0 ? $value : 1;
+}
+
+function buildPageUrl($pageKey, $pageNumber)
+{
+    $params = $_GET;
+    $params[$pageKey] = $pageNumber;
+    return '?' . http_build_query($params);
+}
+
+function renderPagination($currentPage, $totalPages, $pageKey)
+{
+    if ($totalPages <= 1) {
+        return;
+    }
+?>
+    <div class="mt-4 flex items-center justify-between">
+        <span class="text-xs text-gray-500">Page <?= $currentPage ?> of <?= $totalPages ?></span>
+        <div class="flex items-center space-x-2">
+            <?php if ($currentPage > 1): ?>
+                <a href="<?= htmlspecialchars(buildPageUrl($pageKey, $currentPage - 1)) ?>" class="px-3 py-1 text-xs border border-gray-300 rounded-md text-gray-600 hover:bg-gray-50">Previous</a>
+            <?php endif; ?>
+            <?php if ($currentPage < $totalPages): ?>
+                <a href="<?= htmlspecialchars(buildPageUrl($pageKey, $currentPage + 1)) ?>" class="px-3 py-1 text-xs border border-gray-300 rounded-md text-gray-600 hover:bg-gray-50">Next</a>
+            <?php endif; ?>
+        </div>
+    </div>
+<?php
+}
+
 // ------------------------------
 // HANDLE ADD PRODUCT
 // ------------------------------
@@ -65,9 +101,33 @@ if (isset($_POST['action']) && $_POST['action'] == "delete") {
 $categories = mysqli_query($conn, "SELECT * FROM categories ORDER BY name");
 
 // ------------------------------
+// PAGINATION SETTINGS
+// ------------------------------
+$sales_per_page = 5;
+$activities_per_page = 6;
+$top_products_per_page = 5;
+$products_per_page = 10;
+
+$sales_page = getPageNumber('sales_page');
+$activities_page = getPageNumber('activities_page');
+$top_page = getPageNumber('top_page');
+$products_page = getPageNumber('products_page');
+
+$sales_offset = ($sales_page - 1) * $sales_per_page;
+$activities_offset = ($activities_page - 1) * $activities_per_page;
+$top_offset = ($top_page - 1) * $top_products_per_page;
+$products_offset = ($products_page - 1) * $products_per_page;
+
+// ------------------------------
 // FETCH PRODUCTS FOR TABLE
 // ------------------------------
-$products = mysqli_query($conn, "SELECT p.*, c.name as category_name FROM products p LEFT JOIN categories c ON p.category_id = c.id ORDER BY p.id DESC LIMIT 10");
+$products_total = mysqli_fetch_assoc(mysqli_query($conn, "SELECT COUNT(*) as count FROM products"))['count'];
+$products_total_pages = max(1, (int)ceil($products_total / $products_per_page));
+if ($products_page > $products_total_pages) {
+    $products_page = $products_total_pages;
+    $products_offset = ($products_page - 1) * $products_per_page;
+}
+$products = mysqli_query($conn, "SELECT p.*, c.name as category_name FROM products p LEFT JOIN categories c ON p.category_id = c.id ORDER BY p.id DESC LIMIT $products_per_page OFFSET $products_offset");
 
 // ------------------------------
 // FETCH DASHBOARD STATS - FIXED CALCULATIONS
@@ -108,7 +168,40 @@ $sales_stats = mysqli_query($conn, "
     AND sl.created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
     GROUP BY COALESCE(c.name, 'Uncategorized')
     ORDER BY total_sales_amount DESC
+    LIMIT $sales_per_page OFFSET $sales_offset
 ");
+
+$sales_total = mysqli_fetch_assoc(mysqli_query($conn, "
+    SELECT COUNT(*) as count FROM (
+        SELECT COALESCE(c.name, 'Uncategorized') as category_name
+        FROM stock_logs sl
+        JOIN products p ON sl.product_id = p.id
+        LEFT JOIN categories c ON p.category_id = c.id
+        WHERE sl.change_type = 'OUT'
+        AND sl.created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+        GROUP BY COALESCE(c.name, 'Uncategorized')
+    ) as sales_groups
+"))['count'];
+$sales_total_pages = max(1, (int)ceil($sales_total / $sales_per_page));
+if ($sales_page > $sales_total_pages) {
+    $sales_page = $sales_total_pages;
+    $sales_offset = ($sales_page - 1) * $sales_per_page;
+    $sales_stats = mysqli_query($conn, "
+        SELECT 
+            COALESCE(c.name, 'Uncategorized') as category_name,
+            COUNT(DISTINCT sl.product_id) as products_sold,
+            COALESCE(SUM(sl.quantity), 0) as total_items_sold,
+            COALESCE(SUM(sl.quantity * p.price), 0) as total_sales_amount
+        FROM stock_logs sl
+        JOIN products p ON sl.product_id = p.id
+        LEFT JOIN categories c ON p.category_id = c.id
+        WHERE sl.change_type = 'OUT'
+        AND sl.created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+        GROUP BY COALESCE(c.name, 'Uncategorized')
+        ORDER BY total_sales_amount DESC
+        LIMIT $sales_per_page OFFSET $sales_offset
+    ");
+}
 
 $total_sales_summary = mysqli_fetch_assoc(mysqli_query($conn, "
     SELECT 
@@ -138,7 +231,33 @@ $recent_activities = mysqli_query($conn, "
     JOIN products p ON sl.product_id = p.id
     WHERE sl.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
     ORDER BY sl.created_at DESC
+    LIMIT $activities_per_page OFFSET $activities_offset
 ");
+
+$activities_total = mysqli_fetch_assoc(mysqli_query($conn, "
+    SELECT COUNT(*) as count
+    FROM stock_logs sl
+    JOIN products p ON sl.product_id = p.id
+    WHERE sl.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+"))['count'];
+$activities_total_pages = max(1, (int)ceil($activities_total / $activities_per_page));
+if ($activities_page > $activities_total_pages) {
+    $activities_page = $activities_total_pages;
+    $activities_offset = ($activities_page - 1) * $activities_per_page;
+    $recent_activities = mysqli_query($conn, "
+        SELECT 
+            sl.*,
+            p.name as product_name,
+            p.sku as product_sku,
+            sl.created_at as activity_timestamp,
+            UNIX_TIMESTAMP(sl.created_at) as activity_unix_timestamp
+        FROM stock_logs sl
+        JOIN products p ON sl.product_id = p.id
+        WHERE sl.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+        ORDER BY sl.created_at DESC
+        LIMIT $activities_per_page OFFSET $activities_offset
+    ");
+}
 
 // ------------------------------
 // FETCH STOCK MOVEMENT SUMMARY
@@ -171,8 +290,40 @@ $top_products = mysqli_query($conn, "
     GROUP BY p.id, p.name, p.sku
     HAVING total_movement > 0
     ORDER BY total_movement DESC
-    LIMIT 5
+    LIMIT $top_products_per_page OFFSET $top_offset
 ");
+
+$top_total = mysqli_fetch_assoc(mysqli_query($conn, "
+    SELECT COUNT(*) as count FROM (
+        SELECT p.id
+        FROM products p
+        LEFT JOIN stock_logs sl ON p.id = sl.product_id
+            AND sl.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+        GROUP BY p.id, p.name, p.sku
+        HAVING COALESCE(SUM(sl.quantity), 0) > 0
+    ) as top_groups
+"))['count'];
+$top_total_pages = max(1, (int)ceil($top_total / $top_products_per_page));
+if ($top_page > $top_total_pages) {
+    $top_page = $top_total_pages;
+    $top_offset = ($top_page - 1) * $top_products_per_page;
+    $top_products = mysqli_query($conn, "
+        SELECT 
+            p.id,
+            p.name,
+            p.sku,
+            COALESCE(SUM(CASE WHEN sl.change_type = 'IN' THEN sl.quantity ELSE 0 END), 0) as total_in,
+            COALESCE(SUM(CASE WHEN sl.change_type = 'OUT' THEN sl.quantity ELSE 0 END), 0) as total_out,
+            COALESCE(SUM(sl.quantity), 0) as total_movement
+        FROM products p
+        LEFT JOIN stock_logs sl ON p.id = sl.product_id
+            AND sl.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+        GROUP BY p.id, p.name, p.sku
+        HAVING total_movement > 0
+        ORDER BY total_movement DESC
+        LIMIT $top_products_per_page OFFSET $top_offset
+    ");
+}
 ?>
 
 <!DOCTYPE html>
@@ -463,6 +614,7 @@ $top_products = mysqli_query($conn, "
                         <p class="text-sm">No sales data available for the last 30 days</p>
                     </div>
                 <?php endif; ?>
+                <?php renderPagination($sales_page, $sales_total_pages, 'sales_page'); ?>
             </div>
         </div>
 
@@ -601,6 +753,7 @@ $top_products = mysqli_query($conn, "
                         </div>
                     <?php endif; ?>
                 </div>
+                <?php renderPagination($activities_page, $activities_total_pages, 'activities_page'); ?>
             </div>
         </div>
 
@@ -639,6 +792,7 @@ $top_products = mysqli_query($conn, "
                         </div>
                     <?php endif; ?>
                 </div>
+                <?php renderPagination($top_page, $top_total_pages, 'top_page'); ?>
             </div>
         </div>
 
@@ -646,9 +800,6 @@ $top_products = mysqli_query($conn, "
         <div class="bg-white rounded-xl shadow-sm overflow-hidden border border-gray-100">
             <div class="px-6 py-4 border-b border-gray-100 flex justify-between items-center">
                 <h2 class="text-lg font-semibold text-gray-800">Recently Added Products</h2>
-                <button onclick="openModal('addModal')" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors duration-200">
-                    <i class="fas fa-plus mr-2"></i>Add Product
-                </button>
             </div>
             <div class="overflow-x-auto">
                 <table class="w-full">
@@ -660,7 +811,6 @@ $top_products = mysqli_query($conn, "
                             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Stock Level</th>
                             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Price</th>
                             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-gray-100">
@@ -697,26 +847,21 @@ $top_products = mysqli_query($conn, "
                                             <span class="px-2 py-1 text-xs rounded-full bg-green-100 text-green-600">Good</span>
                                         <?php endif; ?>
                                     </td>
-                                    <td class="px-6 py-4 whitespace-nowrap">
-                                        <button onclick='openEditModal(<?= $row['id'] ?>, "<?= addslashes($row['name']) ?>", "<?= addslashes($row['sku']) ?>", <?= $row['price'] ?>, <?= $row['category_id'] ?? 'null' ?>)' class="text-blue-600 hover:text-blue-800 mr-3">
-                                            <i class="fas fa-edit"></i>
-                                        </button>
-                                        <button onclick='openDeleteModal(<?= $row['id'] ?>)' class="text-red-600 hover:text-red-800">
-                                            <i class="fas fa-trash"></i>
-                                        </button>
-                                    </td>
                                 </tr>
                             <?php } ?>
                         <?php else: ?>
                             <tr>
-                                <td colspan="7" class="px-6 py-8 text-center text-gray-500">
+                                <td colspan="6" class="px-6 py-8 text-center text-gray-500">
                                     <i class="fas fa-box-open text-4xl mb-3 text-gray-300"></i>
-                                    <p class="text-sm">No products found. Click "Add Product" to create one.</p>
+                                    <p class="text-sm">No products found.</p>
                                 </td>
                             </tr>
                         <?php endif; ?>
                     </tbody>
                 </table>
+            </div>
+            <div class="px-6 pb-4">
+                <?php renderPagination($products_page, $products_total_pages, 'products_page'); ?>
             </div>
         </div>
     </div>
@@ -726,61 +871,6 @@ $top_products = mysqli_query($conn, "
         <div class="bg-green-500 text-white px-6 py-3 rounded-lg shadow-lg flex items-center">
             <i class="fas fa-check-circle mr-2"></i>
             <span id="toastMessage">Success!</span>
-        </div>
-    </div>
-
-    <!-- ================= ADD MODAL ================= -->
-    <div id="addModal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50">
-        <div class="bg-white p-6 w-96 rounded-lg shadow-xl">
-            <div class="flex justify-between items-center mb-4">
-                <h2 class="text-xl font-bold text-gray-800">Add Product</h2>
-                <button onclick="closeModal('addModal')" class="text-gray-400 hover:text-gray-600">
-                    <i class="fas fa-times text-xl"></i>
-                </button>
-            </div>
-            <form id="addForm" onsubmit="event.preventDefault(); submitAdd();">
-                <div class="mb-4">
-                    <label class="block text-sm font-medium text-gray-700 mb-2">Product Name</label>
-                    <input type="text" name="name" placeholder="Enter product name"
-                        class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" required>
-                </div>
-                <div class="mb-4">
-                    <label class="block text-sm font-medium text-gray-700 mb-2">SKU</label>
-                    <input type="text" name="sku" placeholder="Enter SKU"
-                        class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" required>
-                </div>
-                <div class="mb-4">
-                    <label class="block text-sm font-medium text-gray-700 mb-2">Category</label>
-                    <select name="category_id" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
-                        <option value="">-- Select Category --</option>
-                        <?php
-                        mysqli_data_seek($categories, 0);
-                        while ($cat = mysqli_fetch_assoc($categories)):
-                        ?>
-                            <option value="<?= $cat['id'] ?>"><?= htmlspecialchars($cat['name']) ?></option>
-                        <?php endwhile; ?>
-                    </select>
-                </div>
-                <div class="mb-4">
-                    <label class="block text-sm font-medium text-gray-700 mb-2">Price (₵)</label>
-                    <input type="number" name="price" placeholder="Enter price in Cedis" step="0.01"
-                        class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" required>
-                </div>
-                <div class="mb-4">
-                    <label class="block text-sm font-medium text-gray-700 mb-2">Initial Quantity</label>
-                    <input type="number" name="quantity" value="0" min="0"
-                        class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
-                </div>
-                <div class="flex justify-end space-x-3">
-                    <button type="button" onclick="closeModal('addModal')"
-                        class="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors duration-200">
-                        Cancel
-                    </button>
-                    <button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors duration-200">
-                        Save Product
-                    </button>
-                </div>
-            </form>
         </div>
     </div>
 
@@ -982,32 +1072,6 @@ $top_products = mysqli_query($conn, "
         }
 
         // Submit functions
-        function submitAdd() {
-            const form = document.getElementById('addForm');
-            const formData = new FormData(form);
-            formData.append('action', 'add');
-
-            fetch(window.location.href, {
-                    method: 'POST',
-                    body: formData
-                })
-                .then(response => response.text())
-                .then(data => {
-                    if (data === 'success') {
-                        showToast('Product added successfully!');
-                        closeModal('addModal');
-                        setTimeout(() => {
-                            window.location.reload();
-                        }, 1000);
-                    } else {
-                        showToast('Error adding product', 'error');
-                    }
-                })
-                .catch(error => {
-                    showToast('Error adding product', 'error');
-                });
-        }
-
         function submitEdit() {
             const form = document.getElementById('editForm');
             const formData = new FormData(form);
@@ -1063,7 +1127,7 @@ $top_products = mysqli_query($conn, "
 
         // Close modals when clicking outside
         window.onclick = function(event) {
-            const modals = ['addModal', 'editModal', 'deleteModal'];
+            const modals = ['editModal', 'deleteModal'];
             modals.forEach(modalId => {
                 const modal = document.getElementById(modalId);
                 if (event.target === modal) {
